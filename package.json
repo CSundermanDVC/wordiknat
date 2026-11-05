@@ -1,0 +1,35 @@
+{
+  "name": "wordiknat",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Lokale regenverwachting voor de komende twee uur op KNMI-data.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/CSundermanDVC/wordiknat"
+  },
+  "type": "module",
+  "bin": {
+    "wordiknat": "bin/wordiknat.js"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "serve": "npm run build && node bin/wordiknat.js serve"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.7",
+    "vitest": "^3.2.7"
+  },
+  "dependencies": {
+    "h5wasm": "^0.10.3"
+  }
+}

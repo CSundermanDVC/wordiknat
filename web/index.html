@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="nl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Wordiknat</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="top">
+      <a class="mark" href="/">wordiknat<span>?</span></a>
+      <button id="place-pill" class="pill place" type="button" aria-expanded="true" aria-controls="picker">
+        <svg viewBox="0 0 20 24" aria-hidden="true"><path d="M10 23S2 13 2 8a8 8 0 0 1 16 0c0 5-8 15-8 15z" fill="none" stroke="currentColor" stroke-width="2.5" /><circle cx="10" cy="8" r="3" fill="currentColor" /></svg>
+        <span id="place-name">Kies een plaats</span>
+      </button>
+    </header>
+    <main>
+      <section class="street" aria-label="Het antwoord">
+        <div class="stage" id="stage"></div>
+        <div class="ground">
+          <div class="caption">
+            <p id="summary" class="answer"></p>
+            <p id="detail" class="detail"></p>
+            <p id="issued" class="issued"></p>
+            <p id="announce" class="visually-hidden" role="status"></p>
+          </div>
+        </div>
+      </section>
+      <section id="picker" class="panel picker" aria-labelledby="picker-heading">
+        <h2 id="picker-heading">Kies je plaats</h2>
+        <div id="location"></div>
+      </section>
+      <section class="panels">
+        <article class="panel" aria-labelledby="graph-heading">
+          <header>
+            <h2 id="graph-heading">Wanneer</h2>
+            <p>Neerslag per 5 minuten, in mm per uur</p>
+          </header>
+          <div id="graph"></div>
+        </article>
+        <article class="panel" aria-labelledby="map-heading">
+          <header>
+            <h2 id="map-heading">Waar</h2>
+            <p>Radarverwachting boven Nederland</p>
+          </header>
+          <div id="map"></div>
+        </article>
+      </section>
+    </main>
+    <footer class="foot">
+      <p><b>Geen advertenties, geen trackers.</b> Draait op je eigen computer.</p>
+      <p>Bron: KNMI (CC BY 4.0) · Kaart: BRT Achtergrondkaart, Kadaster/PDOK</p>
+    </footer>
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>

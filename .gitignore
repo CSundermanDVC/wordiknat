@@ -1,0 +1,8 @@
+node_modules
+dist
+.env
+.DS_Store
+.plans/worktrees/
+tmp/
+explainer/
+.impeccable/review/
