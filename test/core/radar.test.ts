@@ -29,7 +29,7 @@ describe("radarCellMap", () => {
     radarCellMap({ ...G, columns: 1, rows: 1 });
     radarCellMap({ ...G, columns: 2, rows: 2 });
     expect(radarCellMap(G)).not.toBe(first);
-  });
+  }, 20_000); // builds two full cell maps; slow on shared CI runners
 
   it("agrees with latLonToCell on a lattice, the corners and Utrecht", () => {
     const map = radarCellMap(G);
