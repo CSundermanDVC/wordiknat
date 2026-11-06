@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ApiError, fetchForecast, searchPlaces } from "../../web/lib/api.ts";
+import { ApiError, fetchForecast, fetchHourly, searchPlaces } from "../../web/lib/api.ts";
 
 const body = () => ({
   summary: "Droog",
@@ -120,5 +120,84 @@ describe("searchPlaces edge cases", () => {
     const urls: string[] = [];
     await searchPlaces("a b&", f(async (u) => (urls.push(u), new Response(JSON.stringify({ results: [] })))));
     expect(urls).toEqual(["/api/geocode?q=a%20b%26"]);
+  });
+});
+
+const hourlyBody = () => ({
+  summary: "Regen vanaf 17:00 (zwaar)",
+  willRain: true,
+  firstRainAt: "2026-11-06T16:00:00.000Z",
+  dryUntil: "2026-11-06T16:00:00.000Z",
+  maxMmPerHour: 2.8,
+  intensity: "zwaar",
+  location: { name: "Utrecht", lat: 52.09, lon: 5.1 },
+  issuedAt: "2026-11-06T12:00:00.000Z",
+  hours: Array.from({ length: 24 }, (_, i) => ({
+    time: new Date(Date.UTC(2026, 10, 6, 13 + i)).toISOString(),
+    mmPerHour: i === 3 ? 2.8 : 0,
+  })),
+  source: "KNMI HARMONIE-model uwcw-ha-det-nl-s1 1.0 (CC BY 4.0)",
+});
+
+describe("fetchHourly", () => {
+  it("parses a valid payload with Dates and 24 hours", async () => {
+    const r = await fetchHourly({ lat: 52.09, lon: 5.1 }, f(reply(hourlyBody())));
+    expect(r.hours).toHaveLength(24);
+    expect(r.hours[3]).toEqual({ time: new Date("2026-11-06T16:00:00.000Z"), mmPerHour: 2.8 });
+    expect(r.issuedAt).toBeInstanceOf(Date);
+    expect(r.firstRainAt).toEqual(new Date("2026-11-06T16:00:00.000Z"));
+    expect([r.intensity, r.summary, r.location.name]).toEqual(["zwaar", "Regen vanaf 17:00 (zwaar)", "Utrecht"]);
+  });
+
+  it("accepts a dry day with null dates and intensity", async () => {
+    const b = { ...hourlyBody(), willRain: false, firstRainAt: null, intensity: null, maxMmPerHour: 0 };
+    const r = await fetchHourly({ lat: 1, lon: 2 }, f(reply(b)));
+    expect([r.firstRainAt, r.intensity]).toEqual([null, null]);
+  });
+
+  it.each([
+    ["missing summary", (b: any) => delete b.summary],
+    ["missing willRain", (b: any) => delete b.willRain],
+    ["missing firstRainAt", (b: any) => delete b.firstRainAt],
+    ["missing dryUntil", (b: any) => delete b.dryUntil],
+    ["missing maxMmPerHour", (b: any) => delete b.maxMmPerHour],
+    ["missing intensity", (b: any) => delete b.intensity],
+    ["unknown intensity", (b: any) => (b.intensity = "extreem")],
+    ["missing location", (b: any) => delete b.location],
+    ["missing issuedAt", (b: any) => delete b.issuedAt],
+    ["missing hours", (b: any) => delete b.hours],
+    ["missing source", (b: any) => delete b.source],
+    ["23 hours", (b: any) => b.hours.pop()],
+    ["25 hours", (b: any) => b.hours.push(b.hours[0])],
+    ["hour not object", (b: any) => (b.hours[5] = null)],
+    ["non-ISO hour time", (b: any) => (b.hours[5].time = "6 november 14:00")],
+    ["parsable non-ISO time", (b: any) => (b.hours[5].time = "2026-11-06")],
+    ["non-ISO issuedAt", (b: any) => (b.issuedAt = "Fri Nov 06 2026")],
+    ["negative mm", (b: any) => (b.hours[5].mmPerHour = -0.1)],
+    ["non-finite mm", (b: any) => (b.hours[5].mmPerHour = 1e999)],
+    ["string mm", (b: any) => (b.hours[5].mmPerHour = "1")],
+    ["negative maxMmPerHour", (b: any) => (b.maxMmPerHour = -1)],
+    ["null maxMmPerHour", (b: any) => (b.maxMmPerHour = null)],
+  ])("rejects %s", async (_n, mutate) => {
+    const b = hourlyBody();
+    mutate(b);
+    const e = await fails(fetchHourly({ lat: 1, lon: 2 }, f(reply(b))));
+    expect(e.code).toBe("BAD_RESPONSE");
+  });
+
+  it("maps a server error body to ApiError with its code", async () => {
+    const msg = "De 24-uursverwachting van het KNMI is nu niet beschikbaar.";
+    const e = await fails(
+      fetchHourly({ lat: 1, lon: 2 }, f(reply({ error: { code: "HOURLY_UNAVAILABLE", message: msg } }, 502))),
+    );
+    expect([e.code, e.message]).toEqual(["HOURLY_UNAVAILABLE", msg]);
+  });
+
+  it("requests /api/hourly with the same query building as fetchForecast", async () => {
+    const urls: string[] = [];
+    const spy = f(async (u) => (urls.push(u), new Response(JSON.stringify(hourlyBody()))));
+    await fetchHourly({ lat: 52.09, lon: 5.1 }, spy);
+    await fetchHourly({ q: "Den Haag/&" }, spy);
+    expect(urls).toEqual(["/api/hourly?lat=52.09&lon=5.1", "/api/hourly?q=Den%20Haag%2F%26"]);
   });
 });

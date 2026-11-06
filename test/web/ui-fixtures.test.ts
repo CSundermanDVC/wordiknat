@@ -3,9 +3,9 @@ import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildFixtures, FIXTURE_NOW, STATES } from "../../scripts/ui-fixtures.ts";
+import { buildFixtures, FIXTURE_NOW, HOURLY_STATES, STATES } from "../../scripts/ui-fixtures.ts";
 import { answerState, heroView } from "../../web/lib/answer-state.ts";
-import { fetchForecast, searchPlaces } from "../../web/lib/api.ts";
+import { ApiError, fetchForecast, fetchHourly, searchPlaces } from "../../web/lib/api.ts";
 import { fetchRadar } from "../../web/lib/radar-data.ts";
 import { sceneKeyOf } from "../../web/lib/scene-model.ts";
 
@@ -46,6 +46,23 @@ describe("ui fixtures (prompt 4.8)", () => {
     expect(r.times.map((t) => t.getTime())).toEqual(f.points.map((p) => p.time.getTime()));
     const wet = r.frames.map((fr) => fr.some((c) => c > 0));
     expect(wet).toEqual(f.points.map((p) => p.mmPerHour >= 0.1));
+  });
+
+  const SENTENCE = { dry: "Droog de komende 24 uur", later: "Regen vanaf 21:00 (zwaar)", now: "Regen tot 17:00 (matig)" } as const;
+  it.each(HOURLY_STATES)("hourly-%s.json passes the page's guard with the expected sentence", async (state) => {
+    const h = await fetchHourly({ lat: 52, lon: 5 }, serve(text(`hourly-${state}.json`)));
+    expect(h.hours).toHaveLength(24);
+    expect(h.summary).toBe(SENTENCE[state]);
+    expect(h.hours[0]!.time.getTime()).toBeLessThanOrEqual(FIXTURE_NOW.getTime());
+  });
+
+  it("hourly-unavailable.json is the HOURLY_UNAVAILABLE error body, with the two-hour fallback hint", async () => {
+    const body = JSON.parse(text("hourly-unavailable.json"));
+    expect(body.error.code).toBe("HOURLY_UNAVAILABLE");
+    const res = (async () => new Response(JSON.stringify(body), { status: 502 })) as unknown as typeof fetch;
+    const err = await fetchHourly({ lat: 52, lon: 5 }, res).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.message).toContain("komende twee uur werkt nog wel");
   });
 
   it("places.json is a valid geocode answer and the tile is a PNG", async () => {

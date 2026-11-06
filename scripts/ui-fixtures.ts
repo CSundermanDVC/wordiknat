@@ -5,9 +5,11 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { crc32, deflateSync } from "node:zlib";
 import { lonLatToPixel, MAP_BBOX, packClasses, RADAR_GRID, rainClass } from "../src/core/map-grid.ts";
-import { buildReport } from "../src/core/report.ts";
+import { WordiknatError } from "../src/core/errors.ts";
+import { summarizeHourly } from "../src/core/hourly-summary.ts";
+import { buildHourlyReport, buildReport } from "../src/core/report.ts";
 import { summarize } from "../src/core/summary.ts";
-import { SOURCE, type ForecastPoint, type Location } from "../src/core/types.ts";
+import { SOURCE, SOURCE_HOURLY, type ForecastPoint, type Location } from "../src/core/types.ts";
 
 /** 14:05 Amsterdam time, the issue time of the mock-ups; the pass installs this as the page clock. */
 export const FIXTURE_NOW = new Date("2026-11-04T13:05:00Z");
@@ -25,6 +27,23 @@ const SERIES: Record<FixtureState, number[]> = {
   now: [1.2, 1.6, 2.0, 2.6, 3.1, 2.8, 2.2, 1.9, 1.5, 1.3, 1.1, 0.9, 0.8, 0.7, 0.7, 0.6, 0.5, 0.5, 0.4, 0.4, 0.3, 0.3, 0.3, 0.2, 0.2],
   drying: [1.4, 1.1, 0.8, 0.5, 0.2, ...zeros(20)],
 };
+
+export const HOURLY_STATES = ["dry", "later", "now"] as const;
+export type HourlyFixtureState = (typeof HOURLY_STATES)[number];
+const HOUR_MS = 3_600_000;
+// 24 hours from the hour of FIXTURE_NOW (14:00 Amsterdam time).
+const HOURLY_SERIES: Record<HourlyFixtureState, number[]> = {
+  dry: zeros(24),
+  later: [...zeros(7), 0.3, 1.1, 2.4, 3.8, 1.6, 0.6, 0.2, ...zeros(10)],
+  now: [1.2, 0.8, 0.3, ...zeros(5), 0.2, 0.5, ...zeros(14)],
+};
+
+function hourlyJson(mm: number[], now: Date): string {
+  const start = Math.floor(now.getTime() / HOUR_MS) * HOUR_MS;
+  const hours = mm.map((v, i) => ({ time: new Date(start + i * HOUR_MS), mmPerHour: v }));
+  const report = buildHourlyReport({ location: PLACE, issuedAt: now, hours, source: SOURCE_HOURLY }, summarizeHourly(hours, now));
+  return JSON.stringify(report);
+}
 
 const points = (mm: number[], start: Date): ForecastPoint[] =>
   mm.map((v, i) => ({ time: new Date(start.getTime() + i * STEP_MS), mmPerHour: v }));
@@ -98,6 +117,10 @@ export function buildFixtures(now: Date = FIXTURE_NOW): Record<string, string | 
   }
   // Issued two hours and five minutes earlier: every step has ended by `now`.
   out["forecast-nodata.json"] = forecastJson(points(SERIES.dry, new Date(now.getTime() - 25 * STEP_MS)), now);
+  for (const s of HOURLY_STATES) out[`hourly-${s}.json`] = hourlyJson(HOURLY_SERIES[s], now);
+  // The body of the 502 the server sends when HARMONIE is missing (route it with status 502).
+  const unavailable = new WordiknatError("HOURLY_UNAVAILABLE");
+  out["hourly-unavailable.json"] = JSON.stringify({ error: { code: unavailable.code, message: unavailable.message } });
   out["places.json"] = JSON.stringify({ results: [PLACE, { name: "Utrechtseweg, Amersfoort, Utrecht", lat: 52.1532, lon: 5.4018 }] });
   out["tile.png"] = tilePng();
   return out;

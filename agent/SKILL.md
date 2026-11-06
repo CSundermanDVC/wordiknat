@@ -1,6 +1,6 @@
 ---
 name: wordiknat
-description: Gebruik dit voor vragen over regen in Nederland in de komende twee uur, zoals "gaat het regenen in Utrecht?" of "kan ik droog naar huis fietsen?". Niet voor verwachtingen verder vooruit of buiten Nederland.
+description: Gebruik dit voor vragen over regen in Nederland in de komende twee uur ("gaat het regenen in Utrecht?") of, met --24u, de komende 24 uur ("wordt het vannacht nat?"). Niet voor het weekend of buiten Nederland.
 ---
 
 # wordiknat: regen in de komende twee uur
@@ -10,7 +10,8 @@ wordiknat geeft een regenverwachting voor de komende twee uur op KNMI-radardata.
 ## Wanneer gebruiken
 
 - De gebruiker vraagt of het gaat regenen, wanneer het begint of stopt, of wanneer het droog is, voor een plek in Nederland.
-- Niet gebruiken voor morgen, het weekend of andere verwachtingen voorbij twee uur, en niet voor plekken buiten Nederland. Zeg dan eerlijk dat dit buiten bereik valt.
+- Gaat de vraag over later vandaag, vannacht of morgenochtend (binnen 24 uur)? Gebruik dan `--24u`. Voor de komende twee uur blijft de gewone vraag (zonder `--24u`) de beste: die is nauwkeuriger (radar).
+- Niet gebruiken voor het weekend of verder dan 24 uur, en niet voor plekken buiten Nederland. Zeg dan eerlijk dat dit buiten bereik valt.
 
 ## Aanroepen
 
@@ -18,6 +19,7 @@ wordiknat geeft een regenverwachting voor de komende twee uur op KNMI-radardata.
 npx wordiknat <plaats> --json          # vanuit de repo-checkout
 wordiknat <plaats> --json              # als het gelinkt of geïnstalleerd is
 wordiknat --lat <n> --lon <n> --json   # met coördinaten
+wordiknat <plaats> --24u --json        # komende 24 uur, per uur
 ```
 
 - Zonder plaats of coördinaten gebruikt wordiknat `WORDIKNAT_LOCATION` (een plaatsnaam of `lat,lon`) uit de omgeving.
@@ -26,7 +28,7 @@ wordiknat --lat <n> --lon <n> --json   # met coördinaten
 
 ## Het resultaat
 
-Het object heeft negen sleutels, in deze volgorde:
+Zonder `--24u` heeft het object negen sleutels, in deze volgorde:
 
 | Sleutel | Type | Betekenis |
 | --- | --- | --- |
@@ -41,6 +43,25 @@ Het object heeft negen sleutels, in deze volgorde:
 | `source` | string | Bron en licentie (KNMI, CC BY 4.0) |
 
 Alle tijden zijn ISO 8601 in UTC. Reken ze om naar Europe/Amsterdam (CET of CEST) voordat je ze noemt.
+
+## De 24-uursverwachting
+
+Met `--24u` komt er één JSON-object met tien sleutels, in deze volgorde (HARMONIE-model van het KNMI, per uur):
+
+| Sleutel | Type | Betekenis |
+| --- | --- | --- |
+| `summary` | string | Eén Nederlandse zin met het antwoord |
+| `willRain` | boolean | `true` als er in de komende 24 uur regen is |
+| `firstRainAt` | string of `null` | Eerste regenuur; `null` als het droog blijft |
+| `dryUntil` | string of `null` | Tot wanneer het droog is; `null` als het al regent of er geen verwachting is |
+| `maxMmPerHour` | number | Hoogste intensiteit in mm/u |
+| `intensity` | string of `null` | `licht`, `matig` of `zwaar`; `null` als het droog blijft |
+| `location` | object | `{ "name", "lat", "lon" }` |
+| `issuedAt` | string | Referentietijd van de modelrun |
+| `hours` | array | Per uur `{ "time", "mmPerHour" }`; `time` is het begin van dat uur |
+| `source` | string | Bron en licentie (KNMI HARMONIE, CC BY 4.0) |
+
+Tijden zijn ISO 8601 in UTC; lees het antwoord zoals hierboven.
 
 ## Antwoorden
 
@@ -72,6 +93,8 @@ Bij een fout staat `{"error":{"code","message"}}` op stdout en is de exitcode 1 
 | `BAD_FILE` | 1 | Het radarbestand was onleesbaar; probeer het over een paar minuten opnieuw. |
 | `NO_DATA` | 1 | Er zijn nu geen radargegevens voor deze plek; probeer het later opnieuw. |
 | `TILE_UNAVAILABLE` | 1 | De kaartondergrond is niet beschikbaar (alleen de webpagina); de verwachting zelf blijft bruikbaar. |
+| `HOURLY_UNAVAILABLE` | 1 | De 24-uursverwachting is nu niet beschikbaar; de verwachting voor twee uur werkt nog, probeer het later opnieuw. |
+| `HOURLY_BAD_FILE` | 1 | Het modelbestand voor de 24-uursverwachting was onleesbaar; probeer het later opnieuw. |
 
 ## Sleutel en veiligheid
 

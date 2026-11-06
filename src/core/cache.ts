@@ -1,4 +1,4 @@
-// File cache for the newest KNMI file (NFR-002): at most one download per 5 minutes.
+// File cache for the newest KNMI file (NFR-002): at most one download per max age (radar: 5 minutes).
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join, posix, win32 } from "node:path";
@@ -25,11 +25,11 @@ function isMeta(v: unknown): v is Meta {
 }
 
 /** Missing, unreadable or corrupt cache all count as empty. */
-async function readCache(dir: string): Promise<{ meta: Meta; bytes: Uint8Array } | null> {
+async function readCache(dir: string, fileName: string): Promise<{ meta: Meta; bytes: Uint8Array } | null> {
   try {
     const meta: unknown = JSON.parse(await readFile(join(dir, "meta.json"), "utf8"));
     if (!isMeta(meta)) return null;
-    return { meta, bytes: new Uint8Array(await readFile(join(dir, "latest.h5"))) };
+    return { meta, bytes: new Uint8Array(await readFile(join(dir, fileName))) };
   } catch {
     return null;
   }
@@ -50,26 +50,31 @@ export async function getLatestFile({
   client,
   dir,
   now,
+  fileName = "latest.h5",
+  maxAgeMs = MAX_AGE_MS,
 }: {
   client: KnmiClient;
   dir: string;
   now: number;
+  /** Local name of the cached file inside `dir`, not the KNMI name. */
+  fileName?: string;
+  maxAgeMs?: number;
 }): Promise<Uint8Array> {
-  const cached = await readCache(dir);
+  const cached = await readCache(dir, fileName);
   // A downloadedAt in the future (clock set back) is treated as stale, not as fresh forever.
   const age = cached ? now - cached.meta.downloadedAt : -1;
-  if (cached && age >= 0 && age < MAX_AGE_MS) return cached.bytes;
+  if (cached && age >= 0 && age < maxAgeMs) return cached.bytes;
 
   // shortcut: a listing failure is rethrown even with a cached file; serve stale data here if that proves too strict.
-  const fileName = await client.latestFileName();
+  const latest = await client.latestFileName();
   await mkdir(dir, { recursive: true });
-  if (cached && cached.meta.fileName === fileName) {
-    await writeMeta(dir, { fileName, downloadedAt: now });
+  if (cached && cached.meta.fileName === latest) {
+    await writeMeta(dir, { fileName: latest, downloadedAt: now });
     return cached.bytes;
   }
 
-  const bytes = await client.download(fileName);
-  await writeAtomic(join(dir, "latest.h5"), bytes);
-  await writeMeta(dir, { fileName, downloadedAt: now });
+  const bytes = await client.download(latest);
+  await writeAtomic(join(dir, fileName), bytes);
+  await writeMeta(dir, { fileName: latest, downloadedAt: now });
   return bytes;
 }

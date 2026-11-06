@@ -9,7 +9,9 @@ import { getApiKey, loadEnv, redact } from "./core/env.ts";
 import { WordiknatError, toErrorJson } from "./core/errors.ts";
 import { getForecast } from "./core/forecast.ts";
 import { geocode } from "./core/geocode.ts";
-import { buildReport } from "./core/report.ts";
+import { getHourly } from "./core/harmonie-client.ts";
+import { summarizeHourly } from "./core/hourly-summary.ts";
+import { buildHourlyReport, buildReport } from "./core/report.ts";
 import { summarize } from "./core/summary.ts";
 import type { ForecastPoint, Location } from "./core/types.ts";
 import { LOOPBACK, startServer } from "./server.ts";
@@ -29,9 +31,10 @@ export type CliDeps = {
 
 type ServeArgs = { port: number; host: string };
 
-const USAGE = `Gebruik: wordiknat [<plaats>] [--lat <n> --lon <n>] [--json] [--help]
+const USAGE = `Gebruik: wordiknat [<plaats>] [--lat <n> --lon <n>] [--24u] [--json] [--help]
        wordiknat serve [--port <n>] [--host <adres>]
 
+Met --24u toont wordiknat alleen de verwachting per uur voor de komende 24 uur (KNMI HARMONIE-model).
 wordiknat serve start de webinterface op http://127.0.0.1:5173 (bouw die eerst met npm run build).
 
 Zonder plaats of coördinaten gebruikt wordiknat WORDIKNAT_LOCATION uit de omgeving of .env
@@ -42,19 +45,19 @@ const BAR_WIDTH = 20;
 const MM_PER_BLOCK = 0.5;
 const hhmm = new Intl.DateTimeFormat("nl-NL", { timeZone: "Europe/Amsterdam", hour: "2-digit", minute: "2-digit" });
 
-/** One row per 10 minutes (every other 5-minute point): `HH:MM  <bar>  <n,nn> mm/u`. */
-function timeline(points: readonly ForecastPoint[]): string[] {
-  return points
-    .filter((_, i) => i % 2 === 0)
-    .map((p) => {
-      // Below the summary's 0.1 mm/u rain threshold the bar stays empty.
-      const blocks = p.mmPerHour < 0.1 ? 0 : Math.min(BAR_WIDTH, Math.ceil(p.mmPerHour / MM_PER_BLOCK));
-      const bar = "█".repeat(blocks).padEnd(BAR_WIDTH);
-      return `${hhmm.format(p.time)}  ${bar}  ${p.mmPerHour.toFixed(2).replace(".", ",")} mm/u`;
-    });
+/** `HH:MM  <bar>  <amount> <unit>`; below the summary's 0.1 mm rain threshold the bar stays empty. */
+function row(p: ForecastPoint, digits: number, unit: string): string {
+  const blocks = p.mmPerHour < 0.1 ? 0 : Math.min(BAR_WIDTH, Math.ceil(p.mmPerHour / MM_PER_BLOCK));
+  const bar = "█".repeat(blocks).padEnd(BAR_WIDTH);
+  return `${hhmm.format(p.time)}  ${bar}  ${p.mmPerHour.toFixed(digits).replace(".", ",")} ${unit}`;
 }
 
-type Args = { json: boolean; help: boolean; place: string; coords: { lat: number; lon: number } | null; serve: ServeArgs | null };
+/** One row per 10 minutes (every other 5-minute point). */
+function timeline(points: readonly ForecastPoint[]): string[] {
+  return points.filter((_, i) => i % 2 === 0).map((p) => row(p, 2, "mm/u"));
+}
+
+type Args = { json: boolean; help: boolean; hourly: boolean; place: string; coords: { lat: number; lon: number } | null; serve: ServeArgs | null };
 
 function num(s: string | undefined, max: number): number {
   const n = s === undefined || s.trim() === "" ? NaN : Number(s);
@@ -74,6 +77,7 @@ function parse(argv: string[]): Args {
         lon: { type: "string" },
         json: { type: "boolean", default: false },
         help: { type: "boolean", default: false },
+        "24u": { type: "boolean", default: false },
         port: { type: "string" },
         host: { type: "string" },
       },
@@ -87,13 +91,14 @@ function parse(argv: string[]): Args {
   if (hasLat !== (values.lon !== undefined) || (hasLat && place !== "")) throw new WordiknatError("BAD_ARGS");
   const coords = hasLat ? { lat: num(values.lat, 90), lon: num(values.lon, 180) } : null;
   const isServe = positionals.length === 1 && positionals[0] === "serve";
+  if (isServe && values["24u"]) throw new WordiknatError("BAD_ARGS");
   if (!isServe && (values.port !== undefined || values.host !== undefined)) throw new WordiknatError("BAD_ARGS");
   // An empty host would make listen() bind every interface (SR-002).
   if (values.host !== undefined && !HOST.test(values.host)) throw new WordiknatError("BAD_ARGS");
   const serve = isServe
     ? { port: values.port === undefined ? 5173 : parsePort(values.port), host: values.host ?? "127.0.0.1" }
     : null;
-  return { json: values.json, help: values.help, place, coords, serve };
+  return { json: values.json, help: values.help, hourly: values["24u"], place, coords, serve };
 }
 
 const HOST = /^[\w.:-]{1,253}$/;
@@ -171,12 +176,23 @@ export async function main(argv: string[], deps: CliDeps): Promise<number> {
     const location: Location = loc.coords
       ? { name: `${loc.coords.lat}, ${loc.coords.lon}`, ...loc.coords }
       : await geocode(loc.place, { fetch });
-    const forecast = await getForecast(location, {
+    const opts = {
       fetch,
       apiKey: key,
       cacheDir: deps.cacheDir ?? defaultCacheDir(deps.env, process.platform, homedir()),
       now: deps.now,
-    });
+    };
+    // --24u answers only the 24-hour question: no radar request.
+    if (args.hourly) {
+      const hourly = await getHourly(location, opts);
+      const h = summarizeHourly(hourly.hours, deps.now);
+      const text = json
+        ? JSON.stringify(buildHourlyReport(hourly, h))
+        : [h.summary, ...hourly.hours.map((p) => row(p, 1, "mm")), "Bron: KNMI HARMONIE-model (CC BY 4.0)"].join("\n");
+      write(deps.stdout, `${text}\n`);
+      return 0;
+    }
+    const forecast = await getForecast(location, opts);
     const s = summarize(forecast.points, deps.now);
     if (!json) {
       write(deps.stdout, `${[s.summary, ...timeline(forecast.points), "Bron: KNMI (CC BY 4.0)"].join("\n")}\n`);

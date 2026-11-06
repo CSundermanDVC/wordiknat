@@ -173,6 +173,49 @@ describe("styles (DOD-2.7, DOD-4.4.4)", () => {
   });
 });
 
+describe("24-hour panel (6.10)", () => {
+  const html = read("web/index.html");
+  const css = read("web/style.css");
+  const glue = read("web/hourly.ts");
+  it("is a panel labelled by its heading, after Waar, with slider, hidden table and status", () => {
+    const at = html.indexOf('aria-labelledby="day-heading"');
+    expect(at).toBeGreaterThan(html.indexOf('id="map"'));
+    expect(html).toContain('<h2 id="day-heading">Komende 24 uur</h2>');
+    expect(html).toMatch(/<input[^>]*id="day-slider"[^>]*type="range"[^>]*min="0"[^>]*max="23"/);
+    expect(html).toContain('aria-label="Uur in de 24-uursverwachting"');
+    // a table box ignores the 1 px height of .visually-hidden, so the class goes on a wrapper div
+    expect(html).toMatch(/<div class="visually-hidden">\s*<table id="day-table"><\/table>\s*<\/div>/);
+    expect(html).not.toMatch(/<table[^>]*class="visually-hidden"/);
+    expect(html).toMatch(/<p id="day-error"[^>]*role="status"/);
+    expect(html).toContain('role="img" aria-label="Neerslag per uur voor de komende 24 uur"');
+    expect(html).toContain("Bron: KNMI HARMONIE-model (CC BY 4.0)");
+  });
+  it("has bar, slider and responsive styles", () => {
+    expect(css).toMatch(/\.bars\s*\{[^}]*repeat\(24, minmax\(0, 1fr\)\)/);
+    expect(css).toMatch(/\.day-slider\s*\{[^}]*accent-color:\s*var\(--ink-line\)/);
+    expect(css).toMatch(/\.panels\.single\s*\{[^}]*minmax\(0, 1fr\)/);
+    expect(css).toMatch(/\.dticks \.lab:not\(\.k6\)/);
+  });
+  it("styles every bar class the model can emit, plus the error line", () => {
+    for (const c of ["licht", "matig", "zwaar", "nil"]) expect(css, c).toMatch(new RegExp(`\\.bar\\.${c}\\b`));
+    expect(css).toMatch(/\.day-error\s*\{/);
+  });
+  it("loads the 24-hour data independently of the forecast, ignoring stale answers", () => {
+    const main = read("web/main.ts");
+    expect(main).toMatch(/void loadHourly\(loc, !sameSpot\)/);
+    expect(main).toMatch(/hourly\.showError\(e\)/);
+    expect(main).toMatch(/mine === hourlySeq/);
+    expect(main).toMatch(/el\("day-panels"\)\.hidden = !state\.location/);
+  });
+  it("the panel markup carries no inline style or script", () => {
+    const panel = html.slice(html.indexOf('id="day-panels"'), html.indexOf("</main>"));
+    expect(panel).not.toMatch(/\sstyle=|\son\w+=|<script|<svg/);
+  });
+  it("glue builds DOM without innerHTML or style attributes", () => {
+    expect(glue).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML|setAttribute\(\s*"style"|<svg/);
+  });
+});
+
 describe("product name (DOD-3.2.1)", () => {
   it("web/index.html title is Wordiknat", () => {
     expect(read("web/index.html")).toMatch(/<title>Wordiknat<\/title>/);

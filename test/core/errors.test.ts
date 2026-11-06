@@ -14,6 +14,8 @@ const EXIT_CODES: Record<ErrorCode, 1 | 2> = {
   BAD_FILE: 1,
   NO_DATA: 1,
   TILE_UNAVAILABLE: 1,
+  HOURLY_UNAVAILABLE: 1,
+  HOURLY_BAD_FILE: 1,
 };
 const CODES = Object.keys(EXIT_CODES) as ErrorCode[];
 

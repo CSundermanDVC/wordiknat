@@ -7,8 +7,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { main } from "../src/cli.ts";
 import { getForecast } from "../src/core/forecast.ts";
 import { cellToLatLon, KNMI_RADAR_GEOMETRY } from "../src/core/projection.ts";
-import { buildReport } from "../src/core/report.ts";
+import { buildHourlyReport, buildReport } from "../src/core/report.ts";
+import { summarizeHourly } from "../src/core/hourly-summary.ts";
 import { summarize } from "../src/core/summary.ts";
+import { SOURCE_HOURLY } from "../src/core/types.ts";
 
 const API = "https://api.dataplatform.knmi.nl/open-data/v1/datasets/radar_forecast/versions/2.0/files";
 const NAME = "RAD_NL25_RAC_FM_202611041100.h5";
@@ -55,5 +57,22 @@ describe("buildReport (US-005, FR-008)", () => {
     expect(Object.keys(report)).toEqual(US005);
     expect(report.issuedAt).toBeInstanceOf(Date);
     expect(`${JSON.stringify(report)}\n`).toBe(out.join(""));
+  });
+});
+
+describe("buildHourlyReport (FR-016)", () => {
+  it("has the fixed key order and keeps Dates", () => {
+    const hours = Array.from({ length: 24 }, (_, i) => ({ time: new Date(Date.UTC(2026, 6, 1, 12 + i)), mmPerHour: 0 }));
+    const location = { name: "x", lat: 52, lon: 5 };
+    const issuedAt = new Date(Date.UTC(2026, 6, 1, 9));
+    const report = buildHourlyReport(
+      { location, issuedAt, hours, source: SOURCE_HOURLY },
+      summarizeHourly(hours, new Date(Date.UTC(2026, 6, 1, 12))),
+    );
+    expect(Object.keys(report)).toEqual([
+      "summary", "willRain", "firstRainAt", "dryUntil", "maxMmPerHour", "intensity", "location", "issuedAt", "hours", "source",
+    ]);
+    expect(report.issuedAt).toBeInstanceOf(Date);
+    expect(report.hours).toHaveLength(24);
   });
 });

@@ -9,7 +9,25 @@ import { createServer, startServer } from "../src/server.ts";
 import { tileRange } from "../src/core/map-grid.ts";
 import { tileUrl } from "../src/core/tiles.ts";
 import { SOURCE } from "../src/core/types.ts";
-import { API, DOWNLOAD, fakeFetch, FIELDS, INSIDE, KEY, NOW, OUTSIDE, PDOK, pdok, png, PNG, TILES, type Override } from "./helpers/fake-fetch.ts";
+import {
+  API,
+  DOWNLOAD,
+  fakeFetch,
+  FIELDS,
+  HARMONIE_API,
+  HARMONIE_INSIDE,
+  HARMONIE_NOW,
+  INSIDE,
+  KEY,
+  NOW,
+  OUTSIDE,
+  PDOK,
+  pdok,
+  png,
+  PNG,
+  TILES,
+  type Override,
+} from "./helpers/fake-fetch.ts";
 
 // The fixture crop spans 55.0-55.4 °N; lat 55 is the only request latitude (bound 49-55) that lands inside it.
 const EDGE = { lat: 55, lon: 5.33 };
@@ -91,6 +109,13 @@ function send(path: string, headers: Record<string, string> = {}, method = "GET"
 const coords = (p: { lat: number; lon: number }) => `lat=${p.lat}&lon=${p.lon}`;
 const errorBody = (code: string) => ({ error: { code, message: expect.any(String) } });
 const knmiStatus = (s: number): Override => (url) => (url.startsWith(`${API}?`) ? new Response(`bad ${KEY}`, { status: s }) : undefined);
+const harmonieStatus = (s: number): Override => (url) =>
+  url.startsWith(`${HARMONIE_API}?`) ? new Response(`bad ${KEY}`, { status: s }) : undefined;
+// The geocoder answers with a place on the HARMONIE fixture's crop.
+const harmoniePlace = (name = "Utrecht, Utrecht"): Override => (url) =>
+  url.startsWith(`${PDOK}/free?`) ? pdok([{ weergavenaam: name, centroide_ll: `POINT(${HARMONIE_INSIDE.lon} ${HARMONIE_INSIDE.lat})` }]) : undefined;
+const HOURLY_FIELDS = ["dryUntil", "firstRainAt", "hours", "intensity", "issuedAt", "location", "maxMmPerHour", "source", "summary", "willRain"];
+const harmonieCalls = () => state.fetch.calls.filter((u) => u.startsWith(HARMONIE_API));
 const noHits: Override = (url) => (url.startsWith(`${PDOK}/free?`) ? pdok([]) : undefined);
 const htmlTile: Override = (url) => (url.startsWith(TILES) ? png("<html></html>", "text/html") : undefined);
 const tileCalls = () => state.fetch.calls.filter((u) => u.startsWith(TILES));
@@ -179,6 +204,101 @@ describe("GET /api/forecast", () => {
     expect(res.status).toBe(200);
     expect(state.fetch.calls.filter((u) => u === DOWNLOAD)).toHaveLength(1);
   });
+
+  it("makes no HARMONIE request", async () => {
+    const { res } = await get(`/api/forecast?${coords(EDGE)}`);
+    expect(res.status).toBe(200);
+    expect(state.fetch.calls.some((u) => u.startsWith(API))).toBe(true);
+    expect(harmonieCalls()).toEqual([]);
+  });
+});
+
+describe("GET /api/hourly (US-020, FR-018)", () => {
+  beforeEach(() => {
+    state.now = HARMONIE_NOW;
+  });
+
+  it("lat/lon: 200 with the hourly report keys and 24 hours, CSP and no-store", async () => {
+    const { res, body } = await get(`/api/hourly?${coords(HARMONIE_INSIDE)}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("application/json; charset=utf-8");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("content-security-policy")).toBe(CSP);
+    expect(Object.keys(body).sort()).toEqual(HOURLY_FIELDS);
+    expect(body.hours).toHaveLength(24);
+    expect(body.location).toEqual({ name: `${HARMONIE_INSIDE.lat}, ${HARMONIE_INSIDE.lon}`, lat: HARMONIE_INSIDE.lat, lon: HARMONIE_INSIDE.lon });
+    // No radar request: the hourly route only talks to HARMONIE.
+    expect(state.fetch.calls.some((u) => u.startsWith(API))).toBe(false);
+  });
+
+  it("q: 200 with the geocoded location", async () => {
+    state.fetch = fakeFetch(harmoniePlace());
+    const { res, body } = await get("/api/hourly?q=Utrecht");
+    expect(res.status).toBe(200);
+    expect(Object.keys(body).sort()).toEqual(HOURLY_FIELDS);
+    expect(body.hours).toHaveLength(24);
+    expect(body.location).toEqual({ name: "Utrecht, Utrecht", lat: HARMONIE_INSIDE.lat, lon: HARMONIE_INSIDE.lon });
+  });
+
+  it.each([
+    ["no parameters", ""],
+    ["lat only", "lat=52"],
+    ["lat 56", "lat=56&lon=5"],
+    ["lon -1", "lat=52&lon=-1"],
+    ["non-numeric lat", "lat=abc&lon=5"],
+    ["non-numeric lon", "lat=52&lon=5e0"],
+    ["q of 101 characters", `q=${"a".repeat(101)}`],
+    ["q together with lat", "q=Utrecht&lat=52"],
+  ])("400 BAD_ARGS for %s without calling fetch", async (_label, query) => {
+    const { res, body, text } = await get(`/api/hourly?${query}`);
+    expect(res.status).toBe(400);
+    expect(res.headers.get("content-security-policy")).toBe(CSP);
+    expect(body).toEqual(errorBody("BAD_ARGS"));
+    expect(text).not.toContain("aaaa");
+    expect(state.fetch.calls).toEqual([]);
+  });
+
+  it("a listing 404 gives 502 HOURLY_UNAVAILABLE", async () => {
+    state.fetch = fakeFetch(harmonieStatus(404));
+    const { res, body } = await get(`/api/hourly?${coords(HARMONIE_INSIDE)}`);
+    expect(res.status).toBe(502);
+    expect(res.headers.get("content-security-policy")).toBe(CSP);
+    expect(body).toEqual(errorBody("HOURLY_UNAVAILABLE"));
+    expect(body.error.message).toContain("24-uursverwachting");
+  });
+
+  it("an unreadable model file gives 502 HOURLY_BAD_FILE", async () => {
+    state.fetch = fakeFetch((url) => (url.startsWith("https://download.example/HARMONIE") ? new Response("not netcdf") : undefined));
+    const { res, body } = await get(`/api/hourly?${coords(HARMONIE_INSIDE)}`);
+    expect(res.status).toBe(502);
+    expect(body).toEqual(errorBody("HOURLY_BAD_FILE"));
+  });
+
+  it.each([
+    ["KNMI 401", 401, 500, "INVALID_KEY"],
+    ["KNMI 429", 429, 503, "RATE_LIMITED"],
+  ])("%s", async (_label, s, status, code) => {
+    state.fetch = fakeFetch(harmonieStatus(s));
+    const { res, body } = await get(`/api/hourly?${coords(HARMONIE_INSIDE)}`);
+    expect(res.status).toBe(status);
+    expect(body).toEqual(errorBody(code));
+  });
+
+  it("missing key: 500 MISSING_KEY without any request", async () => {
+    state.env = {};
+    const { res, body } = await get(`/api/hourly?${coords(HARMONIE_INSIDE)}`);
+    expect(res.status).toBe(500);
+    expect(body).toEqual(errorBody("MISSING_KEY"));
+    expect(state.fetch.calls).toEqual([]);
+  });
+
+  it("unknown place: 404 without echoing the query", async () => {
+    state.fetch = fakeFetch(noHits);
+    const { res, body, text } = await get("/api/hourly?q=Nergenshuizen");
+    expect(res.status).toBe(404);
+    expect(body).toEqual(errorBody("UNKNOWN_PLACE"));
+    expect(text).not.toContain("Nergenshuizen");
+  });
 });
 
 describe("GET /api/geocode", () => {
@@ -212,6 +332,8 @@ describe("headers and routing (SR-004)", () => {
     ["200 tile", TILE_PATH, 200],
     ["400 tile", "/tiles/99/1/1.png", 400],
     ["200 radar", "/api/radar", 200],
+    ["200 hourly", `/api/hourly?${coords(HARMONIE_INSIDE)}`, 200],
+    ["400 hourly", "/api/hourly?lat=56&lon=5", 400],
   ])("CSP, nosniff and no-referrer on a %s", async (_label, path, status) => {
     const r = await send(path);
     expect(r.status).toBe(status);
@@ -221,7 +343,7 @@ describe("headers and routing (SR-004)", () => {
     if (status === 404) expect(JSON.parse(r.body.toString()).error.code).toBe("NOT_FOUND");
   });
 
-  it.each(["/api/forecast", "/api/radar", TILE_PATH])("POST %s gets 405 with Allow: GET, HEAD", async (path) => {
+  it.each(["/api/forecast", "/api/radar", "/api/hourly", TILE_PATH])("POST %s gets 405 with Allow: GET, HEAD", async (path) => {
     const { res } = await get(path, { method: "POST" });
     expect(res.status).toBe(405);
     expect(res.headers.get("allow")).toBe("GET, HEAD");
@@ -298,6 +420,12 @@ describe("the key never reaches a response or stderr (SR-001, DOD-1.8)", () => {
     ["tile", fakeFetch(), TILE_PATH],
     ["bad tile", fakeFetch(), "/tiles/99/1/1.png"],
     ["tile upstream html", fakeFetch(htmlTile), TILE_PATH],
+    ["hourly success", fakeFetch(harmoniePlace(`Utrecht ${KEY}`)), "/api/hourly?q=Utrecht"],
+    ["hourly bad args", fakeFetch(), "/api/hourly?lat=56&lon=5"],
+    ["hourly 401", fakeFetch(harmonieStatus(401)), `/api/hourly?${coords(HARMONIE_INSIDE)}`],
+    ["hourly 404", fakeFetch(harmonieStatus(404)), `/api/hourly?${coords(HARMONIE_INSIDE)}`],
+    ["hourly 429", fakeFetch(harmonieStatus(429)), `/api/hourly?${coords(HARMONIE_INSIDE)}`],
+    ["hourly network", fakeFetch(() => new TypeError(`fetch failed ${KEY}`)), `/api/hourly?${coords(HARMONIE_INSIDE)}`],
   ];
 
   it.each(paths)("%s", async (_label, f, path) => {

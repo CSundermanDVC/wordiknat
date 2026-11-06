@@ -18,6 +18,28 @@ export const FIELDS = ["dryUntil", "firstRainAt", "issuedAt", "location", "maxMm
 
 const FIXTURE = new Uint8Array(readFileSync(fileURLToPath(new URL("../fixtures/radar-sample.h5", import.meta.url))));
 
+export const HARMONIE_API = "https://api.dataplatform.knmi.nl/open-data/v1/datasets/uwcw-ha-det-nl-s1/versions/1.0/files";
+export const HARMONIE_NAME = "uwcw-ha-det-nl-2km_20261106T07_total-precipitation-accumulation-01h-gl.nc";
+export const HARMONIE_DOWNLOAD = "https://download.example/HARMONIE.nc?X-Amz-Signature=def";
+export const HARMONIE_FIXTURE = new Uint8Array(
+  readFileSync(fileURLToPath(new URL("../fixtures/harmonie-sample.nc", import.meta.url))),
+);
+// Fixture run T07 covers hours 07:00Z..19:00Z two days later; at 09:30Z the run is published and 24+ hours remain.
+export const HARMONIE_NOW = new Date("2026-11-06T09:30:00Z");
+// Utrecht: crop cell (4, 4) of the fixture.
+export const HARMONIE_INSIDE = { name: "Utrecht", lat: 52.0907, lon: 5.1214 };
+/** Names in the default listing that must never be requested: other parameters, lookalikes, an older run. */
+export const HARMONIE_DECOYS = [
+  "uwcw-ha-det-nl-2km_20261106T08_wind-speed-of-gust-01h-hagl.nc",
+  `${HARMONIE_NAME}.tmp`,
+  "uwcw-ha-det-nl-2km_20261106T07_solid-precipitation-accumulation-01h-gl.nc",
+  "uwcw-ha-det-nl-2km_20261106T07_total-precipitation-rate-gl.nc",
+  "uwcw-ha-det-nl-2km_20261106T07_rainfall-accumulation-01h-gl.nc",
+  // The older run comes first, so picking the first match instead of the newest would fail.
+  "uwcw-ha-det-nl-2km_20261106T06_total-precipitation-accumulation-01h-gl.nc",
+];
+const HARMONIE_LISTING = [...HARMONIE_DECOYS, HARMONIE_NAME];
+
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 export const pdok = (docs: unknown[]) => json({ response: { numFound: docs.length, docs } });
@@ -30,7 +52,7 @@ export type Override = (url: string) => Response | Error | undefined;
 
 type Init = { headers?: Record<string, string>; redirect?: "error" };
 
-/** Fake fetch for KNMI (listing, download URL, fixture bytes), PDOK and the tile host; `override` wins per URL. */
+/** Fake fetch for KNMI radar and HARMONIE (listing, download URL, fixture bytes), PDOK and the tile host; `override` wins per URL. */
 export function fakeFetch(override?: Override, placeName = "Testdorp, Testgemeente") {
   const calls: string[] = [];
   const inits: Array<Init | undefined> = [];
@@ -43,6 +65,9 @@ export function fakeFetch(override?: Override, placeName = "Testdorp, Testgemeen
     if (url.startsWith(`${API}?`)) return json({ files: [{ filename: NAME }] });
     if (url === `${API}/${NAME}/url`) return json({ temporaryDownloadUrl: DOWNLOAD });
     if (url === DOWNLOAD) return new Response(FIXTURE);
+    if (url.startsWith(`${HARMONIE_API}?`)) return json({ files: HARMONIE_LISTING.map((filename) => ({ filename })) });
+    if (url === `${HARMONIE_API}/${HARMONIE_NAME}/url`) return json({ temporaryDownloadUrl: HARMONIE_DOWNLOAD });
+    if (url === HARMONIE_DOWNLOAD) return new Response(HARMONIE_FIXTURE);
     if (url.startsWith(`${PDOK}/free?`)) {
       return pdok([{ weergavenaam: placeName, centroide_ll: `POINT(${INSIDE.lon} ${INSIDE.lat})` }]);
     }

@@ -7,8 +7,10 @@ import { getApiKey, redact } from "./core/env.ts";
 import { WordiknatError, toErrorJson, type ErrorCode } from "./core/errors.ts";
 import { getForecast } from "./core/forecast.ts";
 import { geocode, searchPlaces } from "./core/geocode.ts";
+import { getHourly } from "./core/harmonie-client.ts";
+import { summarizeHourly } from "./core/hourly-summary.ts";
 import { getRadar } from "./core/radar.ts";
-import { buildReport } from "./core/report.ts";
+import { buildHourlyReport, buildReport } from "./core/report.ts";
 import { summarize } from "./core/summary.ts";
 import { getTile } from "./core/tiles.ts";
 import type { Location } from "./core/types.ts";
@@ -51,6 +53,9 @@ const STATUS: Partial<Record<ErrorCode, number>> = {
   MISSING_KEY: 500,
   INVALID_KEY: 500,
   RATE_LIMITED: 503,
+  // The 24-hour source failing is an upstream problem, like the 502 fallback; the 2-hour routes are unaffected.
+  HOURLY_UNAVAILABLE: 502,
+  HOURLY_BAD_FILE: 502,
 };
 
 const TYPES: Record<string, string> = {
@@ -98,14 +103,25 @@ function debugFetch(fetch: Fetch, log: (text: string) => void): Fetch {
   };
 }
 
-async function forecast(params: URLSearchParams, deps: ServerDeps, fetch: Fetch) {
+/** Shared by /api/forecast and /api/hourly: validates the query, then needs the key before any upstream call. */
+async function locate(params: URLSearchParams, deps: ServerDeps, fetch: Fetch) {
   const query = parseForecastQuery(params);
   const apiKey = getApiKey(deps.env);
   const location: Location = "q" in query ? await geocode(query.q, { fetch }) : { name: `${query.lat}, ${query.lon}`, ...query };
-  const now = deps.now();
+  return { location, opts: { fetch, apiKey, cacheDir: deps.cacheDir, now: deps.now() } };
+}
+
+async function forecast(params: URLSearchParams, deps: ServerDeps, fetch: Fetch) {
+  const { location, opts } = await locate(params, deps, fetch);
   // shortcut: concurrent requests on a stale cache each download; add in-flight dedupe if clients start to race.
-  const f = await getForecast(location, { fetch, apiKey, cacheDir: deps.cacheDir, now });
-  return buildReport(f, summarize(f.points, now));
+  const f = await getForecast(location, opts);
+  return buildReport(f, summarize(f.points, opts.now));
+}
+
+async function hourly(params: URLSearchParams, deps: ServerDeps, fetch: Fetch) {
+  const { location, opts } = await locate(params, deps, fetch);
+  const h = await getHourly(location, opts);
+  return buildHourlyReport(h, summarizeHourly(h.hours, opts.now));
 }
 
 const TILE_PATH = /^\/tiles\/([^/]+)\/([^/]+)\/([^/]+)\.png$/;
@@ -148,6 +164,7 @@ async function route(req: http.IncomingMessage, deps: ServerDeps, fetch: Fetch):
   const url = URL.parse(req.url ?? "/", "http://localhost");
   if (!url) throw new WordiknatError("BAD_ARGS");
   if (url.pathname === "/api/forecast") return [200, await forecast(url.searchParams, deps, fetch)];
+  if (url.pathname === "/api/hourly") return [200, await hourly(url.searchParams, deps, fetch)];
   if (url.pathname === "/api/geocode") {
     const { q } = parseGeocodeQuery(url.searchParams);
     return [200, { results: await searchPlaces(q, { fetch }) }];

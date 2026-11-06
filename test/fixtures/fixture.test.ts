@@ -79,6 +79,54 @@ describe("radar-sample.h5 fixture", () => {
   });
 });
 
+describe("harmonie-sample.nc fixture", () => {
+  const NC = fileURLToPath(new URL("./harmonie-sample.nc", import.meta.url));
+  const VAR = "total-precipitation-accumulation-01h-gl";
+  let file: InstanceType<typeof h5wasm.File>;
+  const ds = (name: string) => file.get(name) as InstanceType<typeof h5wasm.Dataset>;
+
+  beforeAll(async () => {
+    await h5wasm.ready;
+    file = new h5wasm.File(NC, "r");
+  });
+  afterAll(() => file?.close());
+
+  it("has the precipitation variable as float32 [time, gl, lat, lon] = [60, 1, 8, 8] in mm with a NaN fill value", () => {
+    const v = ds(VAR);
+    expect(v.shape).toEqual([60, 1, 8, 8]);
+    expect(v.dtype).toBe("<f");
+    expect(v.attrs.units.value).toBe("mm");
+    expect(Number.isNaN((v.attrs._FillValue.value as Float32Array)[0])).toBe(true);
+    expect([0, 1, 2, 3].map((i) => v.get_attached_scales(i))).toEqual([["/time"], ["/gl"], ["/latitude"], ["/longitude"]]);
+  });
+
+  it("has an hourly time axis starting one hour after the reference time of run 2026-11-06T07", () => {
+    const ref = Number(ds("forecast_reference_time").value as bigint);
+    const time = Array.from(ds("time").value as BigInt64Array, Number);
+    expect(new Date(ref * 1000).toISOString()).toBe("2026-11-06T07:00:00.000Z");
+    expect(file.attrs.forecast_run.value).toBe("2026-11-06T07");
+    expect(ds("time").attrs.units.value).toBe("seconds since 1970-01-01T00:00:00+00:00");
+    expect(time).toEqual(Array.from({ length: 60 }, (_, k) => ref + 3600 * (k + 1)));
+  });
+
+  it("has ascending latitude/longitude cropped to the documented window around Utrecht", () => {
+    const lat = Array.from(ds("latitude").value as Float64Array);
+    const lon = Array.from(ds("longitude").value as Float64Array);
+    lat.forEach((x, i) => expect(x).toBeCloseTo(49 + 0.018 * (168 + i), 9));
+    lon.forEach((x, i) => expect(x).toBeCloseTo(0.029 * (173 + i), 9));
+  });
+
+  it("has exactly one NaN (crop cell (0,0) at step 0) and some rain", () => {
+    const data = ds(VAR).value as Float32Array;
+    expect(data.reduce<number[]>((acc, x, i) => (Number.isNaN(x) ? [...acc, i] : acc), [])).toEqual([0]);
+    expect(data.some((x) => x >= 0.1)).toBe(true);
+  });
+
+  it("stays under 100 kB", () => {
+    expect(statSync(NC).size).toBeLessThan(100_000);
+  });
+});
+
 describe("repo hygiene for prompt 0.1", () => {
   const root = (p: string) => fileURLToPath(new URL(`../../${p}`, import.meta.url));
 

@@ -12,7 +12,9 @@ export type ErrorCode =
   | "UNKNOWN_PLACE"
   | "BAD_ARGS"
   | "NO_LOCATION"
-  | "TILE_UNAVAILABLE";
+  | "TILE_UNAVAILABLE"
+  | "HOURLY_UNAVAILABLE"
+  | "HOURLY_BAD_FILE";
 
 const PORTAL =
   "Vraag gratis een sleutel aan op het KNMI Developer Portal (https://developer.dataplatform.knmi.nl) en zet hem in .env als KNMI_API_KEY=<sleutel>.";
@@ -28,11 +30,15 @@ const MESSAGES: Record<ErrorCode, string> = {
   OUTSIDE_GRID: "Deze locatie ligt buiten het radarbereik van het KNMI. Kies een locatie in of rond Nederland.",
   NO_DATA: "Er zijn op dit moment geen radargegevens voor deze locatie. Probeer het later opnieuw.",
   UNKNOWN_PLACE: "Plaats niet gevonden. Controleer de spelling of gebruik --lat en --lon.",
-  BAD_ARGS: "Ongeldige argumenten. Gebruik: wordiknat <plaats> of wordiknat --lat <n> --lon <n> [--json].",
+  BAD_ARGS: "Ongeldige argumenten. Gebruik: wordiknat <plaats> of wordiknat --lat <n> --lon <n> [--24u] [--json].",
   NO_LOCATION:
     "Geen locatie opgegeven. Geef een plaats of --lat en --lon mee, of zet WORDIKNAT_LOCATION in .env.",
   TILE_UNAVAILABLE:
     "De kaartondergrond is nu niet beschikbaar. Controleer je internetverbinding en probeer het later opnieuw.",
+  HOURLY_UNAVAILABLE:
+    "De 24-uursverwachting van het KNMI is nu niet beschikbaar. De verwachting voor de komende twee uur werkt nog wel; probeer het later opnieuw.",
+  HOURLY_BAD_FILE:
+    "Het modelbestand van het KNMI voor de 24-uursverwachting kon niet worden gelezen. De verwachting voor de komende twee uur werkt nog wel; probeer het later opnieuw.",
 };
 
 // Exit code 2: the user can fix it. Everything else (source, network, data) is exit code 1.

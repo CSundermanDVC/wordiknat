@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import h5wasm from "h5wasm/node";
-import { WordiknatError } from "./errors.ts";
+import { WordiknatError, type ErrorCode } from "./errors.ts";
 import type { GridGeometry } from "./projection.ts";
 
 // Reader for KNMI radar_forecast 2.0 files; layout and rules in docs/knmi-format.md.
@@ -137,24 +137,32 @@ function readOpen(file: Group): RadarFile {
   return { issuedAt, geometry, steps };
 }
 
-/** Decodes a KNMI radar_forecast 2.0 HDF5 file. Throws WordiknatError("BAD_FILE") on anything unexpected. */
-export async function readRadarFile(bytes: Uint8Array): Promise<RadarFile> {
-  if (!(bytes instanceof Uint8Array) || !isHdf5(bytes)) bad();
+/**
+ * Opens HDF5 bytes with h5wasm and hands the open file to `read`; the file is closed and the temp copy
+ * removed on every path. Non-HDF5 bytes and any non-WordiknatError failure become WordiknatError(code).
+ */
+export async function withHdf5File<T>(bytes: Uint8Array, code: ErrorCode, read: (file: Group) => T): Promise<T> {
+  if (!(bytes instanceof Uint8Array) || !isHdf5(bytes)) throw new WordiknatError(code);
   await h5wasm.ready;
   // h5wasm/node reads through the host filesystem (NODERAWFS), so the bytes go to a private temp file.
   const dir = mkdtempSync(join(tmpdir(), "wordiknat-"));
   let file: InstanceType<typeof h5wasm.File> | undefined;
   try {
-    const path = join(dir, "radar.h5");
+    const path = join(dir, "data.h5");
     writeFileSync(path, bytes, { mode: 0o600 });
     file = new h5wasm.File(path, "r");
-    return readOpen(file);
+    return read(file);
   } catch (err) {
-    throw err instanceof WordiknatError ? err : new WordiknatError("BAD_FILE");
+    throw err instanceof WordiknatError ? err : new WordiknatError(code);
   } finally {
     file?.close();
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/** Decodes a KNMI radar_forecast 2.0 HDF5 file. Throws WordiknatError("BAD_FILE") on anything unexpected. */
+export function readRadarFile(bytes: Uint8Array): Promise<RadarFile> {
+  return withHdf5File(bytes, "BAD_FILE", readOpen);
 }
 
 /** The STEP_COUNT rain rates (mm/u) at one cell; null where the file has no data. */

@@ -47,10 +47,43 @@
           <div id="map"></div>
         </article>
       </section>
+      <section id="day-panels" class="panels single" hidden>
+        <article class="panel day" aria-labelledby="day-heading">
+          <header>
+            <h2 id="day-heading">Komende 24 uur</h2>
+            <p>Neerslag per uur volgens het KNMI-HARMONIE-model, in mm</p>
+          </header>
+          <p id="day-error" class="day-error" role="status"></p>
+          <div id="day-body" hidden>
+            <p id="day-summary" class="sum"></p>
+            <p id="day-readout" class="readout" aria-hidden="true"></p>
+            <div class="dchart">
+              <div id="day-plot" class="dplot">
+                <div id="day-refs"></div>
+                <div id="day-bars" class="bars" role="img" aria-label="Neerslag per uur voor de komende 24 uur"></div>
+                <span id="day-scrub" class="dscrub"></span>
+                <span id="day-dot" class="graph-dot"></span>
+                <div id="day-labels"></div>
+              </div>
+              <div id="day-ticks" class="dticks"></div>
+            </div>
+            <div class="day-player">
+              <input id="day-slider" class="day-slider" type="range" min="0" max="23" step="1" value="0" aria-label="Uur in de 24-uursverwachting" />
+            </div>
+            <ul id="day-legend" class="map-legend day-legend">
+              <li><span class="map-swatch swatch-licht"></span>licht</li>
+              <li><span class="map-swatch swatch-matig"></span>matig</li>
+              <li><span class="map-swatch swatch-zwaar"></span>zwaar</li>
+            </ul>
+            <div class="visually-hidden"><table id="day-table"></table></div>
+          </div>
+        </article>
+      </section>
     </main>
     <footer class="foot">
       <p><b>Geen advertenties, geen trackers.</b> Draait op je eigen computer.</p>
       <p>Bron: KNMI (CC BY 4.0) · Kaart: BRT Achtergrondkaart, Kadaster/PDOK</p>
+      <p class="foot-model">Bron: KNMI HARMONIE-model (CC BY 4.0)</p>
     </footer>
     <script type="module" src="/main.ts"></script>
   </body>

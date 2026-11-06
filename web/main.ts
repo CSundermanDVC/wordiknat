@@ -1,7 +1,8 @@
 import type { Location } from "../src/core/types.ts";
-import { ApiError, fetchForecast, searchPlaces, type ForecastView } from "./lib/api.ts";
+import { ApiError, fetchForecast, fetchHourly, searchPlaces, type ForecastView } from "./lib/api.ts";
 import { mountCaption } from "./caption.ts";
 import { mountGraph } from "./graph.ts";
+import { mountHourly } from "./hourly.ts";
 import { mountLocation } from "./location.ts";
 import { mountMap } from "./map.ts";
 import { fetchRadar, nowIndex } from "./lib/radar-data.ts";
@@ -70,6 +71,20 @@ async function loadRadar(): Promise<void> {
 
 const el = (id: string) => document.getElementById(id)!;
 
+const hourly = mountHourly();
+let hourlySeq = 0;
+// Own fetch and own error state: a failure here only changes the 24-hour panel.
+async function loadHourly(loc: Location, fresh: boolean): Promise<void> {
+  const mine = ++hourlySeq;
+  if (fresh) hourly.reset();
+  try {
+    const view = await fetchHourly({ lat: loc.lat, lon: loc.lon });
+    if (mine === hourlySeq) hourly.update(view, new Date());
+  } catch (e) {
+    if (mine === hourlySeq) hourly.showError(e);
+  }
+}
+
 scene = mountScene(el("stage"));
 const status = document.createElement("p");
 status.id = "status";
@@ -93,6 +108,7 @@ function render(): void {
   scene.set(sceneKey);
   el("place-name").textContent = state.location ? formatLocationName(state.location.name) : "Kies een plaats";
   panels.hidden = !state.location;
+  el("day-panels").hidden = !state.location;
   if (!state.location) showPicker(true);
   for (const hook of renderHooks) hook(state);
 }
@@ -105,6 +121,7 @@ export async function loadLocation(loc: Location): Promise<void> {
   // A different place must not show the previous place's forecast.
   state = { location: loc, forecast: sameSpot ? state.forecast : null, error: null };
   if (!state.forecast) render();
+  void loadHourly(loc, !sameSpot);
   try {
     const forecast = await fetchForecast({ lat: loc.lat, lon: loc.lon });
     if (mine !== seq) return;

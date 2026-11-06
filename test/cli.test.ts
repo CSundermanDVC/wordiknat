@@ -10,7 +10,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { main, runServe, type CliDeps } from "../src/cli.ts";
 import { startServer } from "../src/server.ts";
 import { cellToLatLon, KNMI_RADAR_GEOMETRY } from "../src/core/projection.ts";
-import { SOURCE } from "../src/core/types.ts";
+import { SOURCE, SOURCE_HOURLY } from "../src/core/types.ts";
+import {
+  fakeFetch as fullFetch,
+  HARMONIE_API,
+  HARMONIE_INSIDE,
+  HARMONIE_NOW,
+} from "./helpers/fake-fetch.ts";
 
 const KEY = "SENTINEL-KEY-123";
 const API = "https://api.dataplatform.knmi.nl/open-data/v1/datasets/radar_forecast/versions/2.0/files";
@@ -61,7 +67,12 @@ afterEach(async () => {
 
 async function run(
   argv: string[],
-  { fetch = fakeFetch().fetch, env = { KNMI_API_KEY: KEY } as Record<string, string | undefined>, cacheDir = dir } = {},
+  {
+    fetch = fakeFetch().fetch,
+    env = { KNMI_API_KEY: KEY } as Record<string, string | undefined>,
+    cacheDir = dir,
+    now = NOW,
+  }: { fetch?: CliDeps["fetch"]; env?: Record<string, string | undefined>; cacheDir?: string; now?: Date } = {},
 ) {
   const out: string[] = [];
   const err: string[] = [];
@@ -69,7 +80,7 @@ async function run(
     fetch,
     env,
     cwd: dir,
-    now: NOW,
+    now,
     stdout: (s) => out.push(s),
     stderr: (s) => err.push(s),
     cacheDir,
@@ -302,6 +313,7 @@ describe("bin/wordiknat.js (TR-004, DOD-0.9.2)", () => {
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("Gebruik: wordiknat");
     expect(r.stdout).toContain("wordiknat serve");
+    expect(r.stdout).toContain("--24u");
   });
 });
 
@@ -462,5 +474,139 @@ describe("wordiknat serve (US-008, SR-002, DOD-1.4.3)", () => {
     } finally {
       await close(servers[0]);
     }
+  });
+});
+
+describe("--24u (US-019, FR-017, DOD-6.5)", () => {
+  const HOURLY_FIELDS = [
+    "dryUntil",
+    "firstRainAt",
+    "hours",
+    "intensity",
+    "issuedAt",
+    "location",
+    "maxMmPerHour",
+    "source",
+    "summary",
+    "willRain",
+  ];
+  const HERE = coords(HARMONIE_INSIDE);
+  const hourly = (argv: string[], f = fullFetch(), env: Record<string, string | undefined> = { KNMI_API_KEY: KEY }) =>
+    run(argv, { fetch: f.fetch, env, now: HARMONIE_NOW });
+  const isRadar = (url: string) => url.startsWith(API);
+  const isHarmonie = (url: string) => url.startsWith(HARMONIE_API);
+  const listing = (res: () => Response): Override => (url) => (url.startsWith(`${HARMONIE_API}?`) ? res() : undefined);
+
+  it("--json prints one object with exactly the hourly report fields and 24 hours, exit 0, no radar request", async () => {
+    const f = fullFetch();
+    const r = await hourly([...HERE, "--24u", "--json"], f);
+    expect(r.code).toBe(0);
+    expect(r.out).toHaveLength(1);
+    expect(r.stderr).toBe("");
+    const body = JSON.parse(r.stdout);
+    expect(Object.keys(body).sort()).toEqual(HOURLY_FIELDS);
+    expect(body.hours).toHaveLength(24);
+    expect(body.hours[0]).toEqual({ time: "2026-11-06T09:00:00.000Z", mmPerHour: expect.any(Number) });
+    expect(body.source).toBe(SOURCE_HOURLY);
+    expect(body.location).toMatchObject({ lat: HARMONIE_INSIDE.lat, lon: HARMONIE_INSIDE.lon });
+    expect(f.calls.some(isHarmonie)).toBe(true);
+    expect(f.calls.some(isRadar)).toBe(false);
+  });
+
+  it("human output: summary, 24 hourly lines and the HARMONIE source line", async () => {
+    const r = await hourly([...HERE, "--24u"]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe("");
+    const lines = r.stdout.split("\n");
+    expect(lines.pop()).toBe("");
+    expect(lines).toHaveLength(26);
+    expect(lines[0]).toMatch(/^(Droog|Regen) /);
+    const rows = lines.slice(1, -1);
+    // 09:00 UTC is 10:00 in Amsterdam; rows step one hour.
+    expect(rows[0]).toMatch(/^10:00  /);
+    rows.forEach((row) => expect(row).toMatch(/^\d\d:\d\d  [█ ]{20}  \d+,\d mm$/));
+    expect(lines.at(-1)).toMatch(/HARMONIE/);
+    expect(lines.at(-1)).toContain("CC BY 4.0");
+  });
+
+  it("a plain call makes no HARMONIE request and keeps its fields", async () => {
+    const f = fullFetch();
+    const r = await run([...coords(INSIDE), "--json"], { fetch: f.fetch });
+    expect(r.code).toBe(0);
+    expect(Object.keys(JSON.parse(r.stdout)).sort()).toEqual(FIELDS);
+    expect(f.calls.some(isHarmonie)).toBe(false);
+  });
+
+  it("unknown place: exit 2 UNKNOWN_PLACE", async () => {
+    const f = fullFetch((url) => (url.startsWith(`${PDOK}/free?`) ? pdok([]) : undefined));
+    const r = await hourly(["Nergenshuizen", "--24u", "--json"], f);
+    expect(r.code).toBe(2);
+    expect(JSON.parse(r.stdout)).toEqual({ error: { code: "UNKNOWN_PLACE", message: expect.any(String) } });
+    expect(f.calls.some(isHarmonie)).toBe(false);
+  });
+
+  it("invalid key (401): exit 2 INVALID_KEY", async () => {
+    const r = await hourly([...HERE, "--24u", "--json"], fullFetch(listing(() => new Response("", { status: 401 }))));
+    expect(r.code).toBe(2);
+    expect(JSON.parse(r.stdout).error.code).toBe("INVALID_KEY");
+  });
+
+  it("listing 404: HOURLY_UNAVAILABLE with exit 1, in JSON and in text", async () => {
+    const f = () => fullFetch(listing(() => new Response("", { status: 404 })));
+    const j = await hourly([...HERE, "--24u", "--json"], f());
+    expect(j.code).toBe(1);
+    expect(j.stderr).toBe("");
+    expect(JSON.parse(j.stdout)).toEqual({ error: { code: "HOURLY_UNAVAILABLE", message: expect.any(String) } });
+    const t = await hourly([...HERE, "--24u"], f());
+    expect(t.code).toBe(1);
+    expect(t.stdout).toBe("");
+    expect(t.stderr).toContain("24-uursverwachting");
+  });
+
+  it("missing key: exit 2 MISSING_KEY before any request", async () => {
+    const f = fullFetch();
+    const r = await hourly([...HERE, "--24u", "--json"], f, {});
+    expect(r.code).toBe(2);
+    expect(JSON.parse(r.stdout).error.code).toBe("MISSING_KEY");
+    expect(f.calls).toEqual([]);
+  });
+
+  it("--24u with serve is BAD_ARGS", async () => {
+    const r = await run(["serve", "--24u", "--json"]);
+    expect(r.code).toBe(2);
+    expect(JSON.parse(r.stdout).error.code).toBe("BAD_ARGS");
+  });
+
+  it("--help lists --24u", async () => {
+    const r = await run(["--help"]);
+    expect(r.stdout).toContain("--24u");
+  });
+
+  describe("the key never reaches stdout or stderr", () => {
+    const keyedPlace: Override = (url) =>
+      url.startsWith(`${PDOK}/free?`)
+        ? pdok([{ weergavenaam: `Dorp ${KEY}`, centroide_ll: `POINT(${HARMONIE_INSIDE.lon} ${HARMONIE_INSIDE.lat})` }])
+        : undefined;
+    const keyed = (s: number) => listing(() => new Response(`bad ${KEY}`, { status: s }));
+    const paths: Array<[string, () => ReturnType<typeof fullFetch>, string[]]> = [
+      // The place name carries the key, so the success path proves redaction itself works.
+      ["success", () => fullFetch(keyedPlace), ["Dorp"]],
+      ["unknown place", () => fullFetch((url) => (url.startsWith(`${PDOK}/free?`) ? pdok([]) : undefined)), [KEY]],
+      ["401", () => fullFetch(keyed(401)), HERE],
+      ["404", () => fullFetch(keyed(404)), HERE],
+      ["500", () => fullFetch(keyed(500)), HERE],
+      ["network", () => fullFetch(() => new TypeError(`fetch failed ${KEY}`)), HERE],
+    ];
+
+    it.each(paths.flatMap(([label, f, argv]) => [[`${label} --json`, f, [...argv, "--json"]], [label, f, argv]] as const))(
+      "%s",
+      async (label, f, argv) => {
+        const r = await hourly([...argv, "--24u"], f());
+        if (label.startsWith("success")) expect(r.code).toBe(0);
+        expect(r.stdout + r.stderr).not.toBe("");
+        expect(r.stdout).not.toContain(KEY);
+        expect(r.stderr).not.toContain(KEY);
+      },
+    );
   });
 });
