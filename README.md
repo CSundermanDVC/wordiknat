@@ -270,7 +270,7 @@ Achtergrond bij de bronnen (Engels): [`docs/knmi-format.md`](docs/knmi-format.md
 
 ## Licentie
 
-MIT, zie [LICENSE](LICENSE).
+MIT, zie [LICENSE](LICENSE). Gemaakt door [Cas Sunderman](https://cassunderman.nl); hoe ik het gebruik staat op [cassunderman.nl/werkbank/wordiknat](https://cassunderman.nl/werkbank/wordiknat).
 
 ## English
 
